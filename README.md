@@ -41,14 +41,33 @@ Configure the npm plugin using OpenCode's tuple form:
 
 ## Configuration
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `host` | `127.0.0.1` | Listener address. A token is required outside loopback. |
-| `port` | `4097` | Listener port. `0` selects an ephemeral port for tests. |
-| `cors` | `false` | `true` allows all origins; a string array is an exact allowlist. |
-| `token` | unset | Optional bearer token expected in `Authorization`. |
+| Option  | Default     | Description                                                      |
+| ------- | ----------- | ---------------------------------------------------------------- |
+| `host`  | `127.0.0.1` | Listener address. A token is required outside loopback.          |
+| `port`  | `4097`      | Listener port. `0` selects an ephemeral port for tests.          |
+| `cors`  | `false`     | `true` allows all origins; a string array is an exact allowlist. |
+| `token` | unset       | Optional bearer token expected in `Authorization`.               |
 
 Configuration is read from the plugin tuple only. The plugin does not use `OPENAI_API_KEY` as an upstream key; provider authentication comes from OpenCode.
+
+### Restart OpenCode
+
+OpenCode loads plugins once per process and caches project instances. Rebuilds and configuration changes require a process restart.
+
+For a directly started OpenCode server:
+
+```bash
+pkill -f '[o]pencode serve'
+opencode serve
+```
+
+Then verify that the plugin listener started:
+
+```bash
+curl --fail-with-body http://127.0.0.1:4097/v1/version
+```
+
+If the listener does not start, open or request the intended OpenCode project once. OpenCode initializes plugins lazily per project directory.
 
 ## Endpoints
 
@@ -121,25 +140,46 @@ Explicit provider reasoning is exposed through the nonstandard `reasoning_conten
 
 User message content accepts OpenAI `image_url` parts with an HTTP(S) URL or base64 image data URL:
 
-```json
-{
-  "model": "openai/gpt-4o",
-  "messages": [
+```bash
+image=$(
+  ffmpeg \
+    -loglevel error \
+    -f lavfi \
+    -i color=c=red:s=64x64 \
+    -frames:v 1 \
+    -f image2pipe \
+    -vcodec png \
+    - \
+  | base64 -w0
+)
+
+jq -n --arg image "$image" '{
+  model: "openai/gpt-5.6-luna",
+  messages: [
     {
-      "role": "user",
-      "content": [
-        {"type": "text", "text": "Describe this image."},
+      role: "user",
+      content: [
         {
-          "type": "image_url",
-          "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}
+          type: "text",
+          text: "Confirm that you received the image and state its color."
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: ("data:image/png;base64," + $image)
+          }
         }
       ]
     }
   ]
-}
+}' |
+  curl --fail-with-body --silent --show-error --max-time 90 \
+    http://127.0.0.1:4097/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    --data-binary @-
 ```
 
-Data URLs are validated and size-bounded before a burner session is created. Remote URLs are passed through and are not downloaded by the plugin. OpenAI file IDs are not supported.
+This smoke test was verified with the OAuth-backed OpenAI provider; the model identified the generated image as red. Data URLs are validated and size-bounded before a burner session is created. Remote URLs are passed through and are not downloaded by the plugin. OpenAI file IDs are not supported.
 
 ### Function Tools
 
@@ -179,7 +219,7 @@ After executing the calls, send a new request containing the complete history:
 {
   "model": "openai/gpt-4o",
   "messages": [
-    {"role": "user", "content": "What is the current stock price of AAPL?"},
+    { "role": "user", "content": "What is the current stock price of AAPL?" },
     {
       "role": "assistant",
       "content": null,
@@ -207,7 +247,7 @@ After executing the calls, send a new request containing the complete history:
         "name": "get_stock_price",
         "parameters": {
           "type": "object",
-          "properties": {"ticker": {"type": "string"}},
+          "properties": { "ticker": { "type": "string" } },
           "required": ["ticker"]
         }
       }
@@ -225,6 +265,8 @@ Supported upstream protocols:
 - OpenAI Chat Completions.
 - OpenAI Responses, translated internally to the public Chat Completions schema.
 
+OpenAI browser OAuth uses the ChatGPT Codex Responses transport. The adapter handles its compatibility differences, including missing SSE content types and mapping Chat Completions `system` messages to Responses `developer` messages. Text, function tools, and base64 image inputs have been smoke-tested with this transport.
+
 Not currently supported:
 
 - Google Gemini/Vertex native protocols.
@@ -238,6 +280,8 @@ Not currently supported:
 Unsupported transports return an OpenAI-shaped `unsupported_provider` error before the plugin sends a real inference request. Disable OpenCode's experimental native LLM runtime for models used through this plugin.
 
 Only explicit OpenAI-compatible request fields are mapped. Unrelated sampling and output-format fields are currently ignored rather than blindly forwarded through OpenCode.
+
+For the isolated local-server test command and details of the OpenAI issues found during development, see [`.plan/openai-local-testing.md`](.plan/openai-local-testing.md).
 
 ## Security
 
