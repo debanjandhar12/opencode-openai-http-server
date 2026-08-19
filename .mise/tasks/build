@@ -4,6 +4,7 @@
 #MISE sources=["src/**/*"]
 #MISE outputs=["dist/index.js", "dist/index.d.ts"]
 
+rm -rf dist
 bun build ./src/index.ts --outdir dist --target bun
 bunx tsc --project tsconfig.build.json
 bun ./.mise/rewrite-declarations.ts

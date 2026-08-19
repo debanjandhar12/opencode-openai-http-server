@@ -9,6 +9,7 @@ export type OpenAIErrorCode =
   | 'upstream_error'
   | 'service_unavailable'
   | 'request_timeout'
+  | 'unsupported_provider'
   | 'internal_error';
 
 export type OpenAIErrorType =

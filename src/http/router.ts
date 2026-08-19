@@ -14,18 +14,18 @@ import {
   usageChunk,
 } from '../openai/sse.ts';
 import type { NormalizedCompletion } from '../openai/types.ts';
-import type { OpenCodeSessionClient } from '../opencode/client.ts';
-import type { SessionRunOptions } from '../opencode/session-runner.ts';
+import type { OpenCodeProxyClient } from '../opencode/client.ts';
+import type { ProxyRunOptions } from '../proxy/runner.ts';
 import { authenticate } from './auth.ts';
 import { corsHeaders } from './cors.ts';
 
 export interface RouterDependencies {
   options: ResolvedServerOptions;
-  client: Pick<OpenCodeSessionClient, 'providers'>;
+  client: Pick<OpenCodeProxyClient, 'providers'>;
   runner: {
     run(
       request: ReturnType<typeof parseChatCompletionJSON>,
-      options?: SessionRunOptions
+      options?: ProxyRunOptions
     ): Promise<NormalizedCompletion>;
   };
   openCodeVersion: string;
@@ -47,7 +47,7 @@ export function createRouter(
         throw new ProtocolError(503, 'service_unavailable', 'The server is shutting down.');
       }
       const url = new URL(request.url);
-      if (url.pathname === '/version' && request.method === 'GET') {
+      if (url.pathname === '/v1/version' && request.method === 'GET') {
         return json(
           {
             object: 'version',
@@ -69,7 +69,7 @@ export function createRouter(
         return json(toChatCompletion(completion), 200, cors);
       }
       if (
-        url.pathname === '/version' ||
+        url.pathname === '/v1/version' ||
         url.pathname === '/v1/models' ||
         url.pathname === '/v1/chat/completions'
       ) {
@@ -119,13 +119,14 @@ function streamCompletion(
         .run(parsed, {
           signal: streamController.signal,
           identity,
-          onDelta(delta): void {
+          onEvent(event): void {
+            if (event.type !== 'text' && event.type !== 'reasoning') return;
             enqueue(
               sseData(
                 contentChunk(
                   shell,
-                  delta.value,
-                  delta.type === 'reasoning' ? 'reasoning_content' : 'content'
+                  event.value,
+                  event.type === 'reasoning' ? 'reasoning_content' : 'content'
                 )
               )
             );

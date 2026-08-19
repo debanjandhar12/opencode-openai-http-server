@@ -2,6 +2,7 @@ export {
   OpenCodeOpenAIHttpServerModule as default,
   OpenCodeOpenAIHttpServerModule,
   OpenCodeOpenAIHttpServerPlugin,
+  PLUGIN_VERSION,
   server,
 } from './plugin.ts';
 export type { OpenAIHttpServerOptions } from './config.ts';
@@ -14,4 +15,3 @@ export type {
   OpenAIModel,
   ParsedChatCompletionRequest,
 } from './openai/types.ts';
-export { PLUGIN_VERSION } from './version.ts';

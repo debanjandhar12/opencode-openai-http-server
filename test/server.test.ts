@@ -14,7 +14,7 @@ describe('HTTP router', () => {
     expect(denied.headers.get('www-authenticate')).toBe('Bearer');
 
     const response = await router(
-      new Request('http://localhost/version', {
+      new Request('http://localhost/v1/version', {
         headers: { authorization: 'Bearer secret' },
       })
     );
@@ -24,6 +24,13 @@ describe('HTTP router', () => {
       plugin: '0.0.1',
       opencode: '1.18.15',
     });
+
+    const oldRoute = await router(
+      new Request('http://localhost/version', {
+        headers: { authorization: 'Bearer secret' },
+      })
+    );
+    expect(oldRoute.status).toBe(404);
   });
 
   it('lists canonical provider/model IDs', async () => {
@@ -90,7 +97,7 @@ function dependencies(options: { token?: string } = {}): RouterDependencies {
     },
     runner: {
       async run(_request, runOptions): Promise<NormalizedCompletion> {
-        runOptions?.onDelta?.({ type: 'text', value: 'live' });
+        runOptions?.onEvent?.({ type: 'text', value: 'live' });
         return {
           id: runOptions?.identity?.id ?? 'chatcmpl-test',
           created: runOptions?.identity?.created ?? 1,
