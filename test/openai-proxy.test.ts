@@ -67,6 +67,27 @@ describe('OpenAI wire adapter', () => {
     expect(body.tools[0]).toMatchObject({ type: 'function', name: 'lookup' });
   });
 
+  it('maps Chat system messages to Codex-compatible Responses developer messages', () => {
+    const adapter = new OpenAIWireAdapter('responses');
+    const request = parseChatCompletionRequest({
+      model: 'openai/gpt-5.6-luna',
+      messages: [
+        { role: 'system', content: 'System rules.' },
+        { role: 'user', content: 'Hello.' },
+      ],
+    });
+
+    const built = adapter.buildRequest(
+      captured('responses'),
+      request,
+      new AbortController().signal
+    );
+    const body = JSON.parse(String(built.init.body));
+
+    expect(body.input[0]).toMatchObject({ type: 'message', role: 'developer' });
+    expect(body.input[1]).toMatchObject({ type: 'message', role: 'user' });
+  });
+
   it('parses interleaved Chat tool calls, reasoning, usage, and finish', async () => {
     const frames = [
       { choices: [{ index: 0, delta: { reasoning_content: 'think' }, finish_reason: null }] },
@@ -179,6 +200,19 @@ describe('OpenAI wire adapter', () => {
     expect(output).toContainEqual({ type: 'text', value: 'OK' });
     expect(output).toContainEqual({ type: 'usage', input: 2, output: 1 });
     expect(output.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('includes a bounded structured provider error message', async () => {
+    const response = Response.json(
+      { error: { code: 'invalid_tool', message: 'Tool schema is invalid.' } },
+      { status: 400 }
+    );
+
+    await expect(
+      collect(new OpenAIWireAdapter('responses').events(response, new AbortController().signal))
+    ).rejects.toMatchObject({
+      message: 'Provider request failed with status 400: invalid_tool: Tool schema is invalid.',
+    });
   });
 });
 

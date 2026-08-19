@@ -313,7 +313,12 @@ function buildResponsesBody(
       });
       continue;
     }
-    input.push(responsesMessage(message.role, message.content ?? []));
+    input.push(
+      responsesMessage(
+        message.role === 'system' ? 'developer' : message.role,
+        message.content ?? []
+      )
+    );
   }
   return {
     ...stripDynamic(template),
@@ -544,8 +549,24 @@ function finishReason(value: unknown): 'stop' | 'length' | 'tool_calls' | undefi
 }
 
 async function upstreamResponseError(response: Response): Promise<ProtocolError> {
-  await response.body?.cancel().catch(() => undefined);
-  return upstreamError(`Provider request failed with status ${response.status}.`);
+  let detail: string | undefined;
+  try {
+    const text = (await response.text()).slice(0, 8_192);
+    const value: unknown = JSON.parse(text);
+    if (isRecord(value)) {
+      const error = isRecord(value.error) ? value.error : value;
+      const message = typeof error.message === 'string' ? error.message : undefined;
+      const code = typeof error.code === 'string' ? error.code : undefined;
+      if (message) detail = code ? `${code}: ${message}` : message;
+    }
+  } catch {
+    // Provider errors may be empty or non-JSON; keep the public error sanitized.
+  }
+  return upstreamError(
+    detail
+      ? `Provider request failed with status ${response.status}: ${detail}`
+      : `Provider request failed with status ${response.status}.`
+  );
 }
 
 function upstreamError(message: string): ProtocolError {
