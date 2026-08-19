@@ -1,7 +1,7 @@
 {
   "name": "opencode-openai-http-server",
   "version": "0.0.1",
-  "description": "Expose a openai compatable http server",
+  "description": "Expose an OpenAI-compatible HTTP server from OpenCode",
   "author": {
     "name": "debanjandhar12",
     "email": "debanjandhar12@gmail.com"
@@ -9,6 +9,10 @@
   "type": "module",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -36,5 +40,10 @@
     "prettier": "^3.2.4",
     "typescript-eslint": "^8.47.0",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.15",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
   }
 }
