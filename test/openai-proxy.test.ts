@@ -138,6 +138,31 @@ describe('OpenAI wire adapter', () => {
     expect(output).toContainEqual({ type: 'usage', input: 5, output: 2 });
     expect(output.at(-1)).toEqual({ type: 'finish', reason: 'tool_calls' });
   });
+
+  it('accepts successful non-streaming Responses JSON from OAuth-backed providers', async () => {
+    const response = Response.json({
+      id: 'resp_1',
+      status: 'completed',
+      output: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 'brief thought' }] },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'OK' }],
+        },
+      ],
+      usage: { input_tokens: 6, output_tokens: 3 },
+    });
+
+    const output = await collect(
+      new OpenAIWireAdapter('responses').events(response, new AbortController().signal)
+    );
+
+    expect(output).toContainEqual({ type: 'reasoning', value: 'brief thought' });
+    expect(output).toContainEqual({ type: 'text', value: 'OK' });
+    expect(output).toContainEqual({ type: 'usage', input: 6, output: 3 });
+    expect(output.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
 });
 
 function captured(protocol: CapturedRequest['protocol']): CapturedRequest {

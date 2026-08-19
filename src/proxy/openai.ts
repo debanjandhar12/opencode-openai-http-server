@@ -34,11 +34,20 @@ export class OpenAIWireAdapter implements ProviderAdapter {
 
   async *events(response: Response, signal: AbortSignal): AsyncIterable<ProviderEvent> {
     if (!response.ok) throw await upstreamResponseError(response);
-    if (!response.body) throw upstreamError('Provider returned an empty response.');
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('text/event-stream')) {
-      throw upstreamError('Provider did not return an event stream.');
+      let value: unknown;
+      try {
+        value = await response.json();
+      } catch {
+        throw upstreamError('Provider returned an unsupported response.');
+      }
+      if (!isRecord(value)) throw upstreamError('Provider returned a malformed response.');
+      const events = this.protocol === 'responses' ? responsesJSONEvents(value) : chatJSONEvents(value);
+      for (const event of events) yield event;
+      return;
     }
+    if (!response.body) throw upstreamError('Provider returned an empty response.');
     const protocol =
       this.protocol ?? (response.url.includes('/responses') ? 'responses' : undefined);
     const parser = parseSSE(response.body, signal);
@@ -66,6 +75,106 @@ export class OpenAIWireAdapter implements ProviderAdapter {
     }
     if (!finished) throw upstreamError('Provider stream ended without a completion event.');
   }
+}
+
+function chatJSONEvents(value: Record<string, unknown>): ProviderEvent[] {
+  if (isRecord(value.error)) throw upstreamError('Provider returned an error response.');
+  const choices = Array.isArray(value.choices) ? value.choices : [];
+  if (choices.length !== 1 || !isRecord(choices[0])) {
+    throw upstreamError('Provider returned an invalid number of choices.');
+  }
+  const choice = choices[0];
+  const message = isRecord(choice.message) ? choice.message : {};
+  const events: ProviderEvent[] = [];
+  const reasoning =
+    typeof message.reasoning_content === 'string'
+      ? message.reasoning_content
+      : typeof message.reasoning === 'string'
+        ? message.reasoning
+        : undefined;
+  if (reasoning) events.push({ type: 'reasoning', value: reasoning });
+  if (typeof message.content === 'string' && message.content) {
+    events.push({ type: 'text', value: message.content });
+  }
+  if (Array.isArray(message.tool_calls)) {
+    for (const [index, rawCall] of message.tool_calls.entries()) {
+      if (!isRecord(rawCall)) continue;
+      const fn = isRecord(rawCall.function) ? rawCall.function : {};
+      events.push({
+        type: 'tool-start',
+        index,
+        id: typeof rawCall.id === 'string' ? rawCall.id : `call_${crypto.randomUUID()}`,
+        name: typeof fn.name === 'string' ? fn.name : '',
+      });
+      if (typeof fn.arguments === 'string' && fn.arguments) {
+        events.push({ type: 'tool-arguments', index, value: fn.arguments });
+      }
+    }
+  }
+  const usage = usageEvent(value.usage);
+  if (usage) events.push(usage);
+  events.push({
+    type: 'finish',
+    reason:
+      events.some((event) => event.type === 'tool-start')
+        ? 'tool_calls'
+        : finishReason(choice.finish_reason) ?? 'stop',
+  });
+  return events;
+}
+
+function responsesJSONEvents(value: Record<string, unknown>): ProviderEvent[] {
+  if (value.status === 'failed' || isRecord(value.error)) {
+    throw upstreamError('Provider returned an error response.');
+  }
+  const events: ProviderEvent[] = [];
+  const output = Array.isArray(value.output) ? value.output : [];
+  let toolIndex = 0;
+  for (const item of output) {
+    if (!isRecord(item)) continue;
+    if (item.type === 'reasoning' && Array.isArray(item.summary)) {
+      for (const part of item.summary) {
+        if (isRecord(part) && typeof part.text === 'string' && part.text) {
+          events.push({ type: 'reasoning', value: part.text });
+        }
+      }
+      continue;
+    }
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (!isRecord(part)) continue;
+        if (part.type === 'output_text' && typeof part.text === 'string' && part.text) {
+          events.push({ type: 'text', value: part.text });
+        }
+      }
+      continue;
+    }
+    if (item.type === 'function_call') {
+      const index = toolIndex++;
+      events.push({
+        type: 'tool-start',
+        index,
+        id:
+          typeof item.call_id === 'string'
+            ? item.call_id
+            : typeof item.id === 'string'
+              ? item.id
+              : `call_${crypto.randomUUID()}`,
+        name: typeof item.name === 'string' ? item.name : '',
+      });
+      if (typeof item.arguments === 'string' && item.arguments) {
+        events.push({ type: 'tool-arguments', index, value: item.arguments });
+      }
+    }
+  }
+  const usage = usageEvent(value.usage);
+  if (usage) events.push(usage);
+  const hasTools = events.some((event) => event.type === 'tool-start');
+  events.push({
+    type: 'finish',
+    reason: hasTools ? 'tool_calls' : value.status === 'incomplete' ? 'length' : 'stop',
+  });
+  return events;
 }
 
 function buildChatBody(
