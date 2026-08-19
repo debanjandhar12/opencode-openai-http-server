@@ -163,6 +163,23 @@ describe('OpenAI wire adapter', () => {
     expect(output).toContainEqual({ type: 'usage', input: 6, output: 3 });
     expect(output.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
   });
+
+  it('sniffs SSE when a compatible provider omits its content type', async () => {
+    const response = new Response(
+      [
+        `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'OK' })}\n\n`,
+        `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { output: [], usage: { input_tokens: 2, output_tokens: 1 } } })}\n\n`,
+      ].join('')
+    );
+
+    const output = await collect(
+      new OpenAIWireAdapter('responses').events(response, new AbortController().signal)
+    );
+
+    expect(output).toContainEqual({ type: 'text', value: 'OK' });
+    expect(output).toContainEqual({ type: 'usage', input: 2, output: 1 });
+    expect(output.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
 });
 
 function captured(protocol: CapturedRequest['protocol']): CapturedRequest {

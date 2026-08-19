@@ -35,22 +35,23 @@ export class OpenAIWireAdapter implements ProviderAdapter {
   async *events(response: Response, signal: AbortSignal): AsyncIterable<ProviderEvent> {
     if (!response.ok) throw await upstreamResponseError(response);
     const contentType = response.headers.get('content-type') ?? '';
-    if (!contentType.includes('text/event-stream')) {
+    const body = await classifyBody(response, contentType);
+    if (body.type === 'json') {
       let value: unknown;
       try {
-        value = await response.json();
+        value = JSON.parse(body.value);
       } catch {
         throw upstreamError('Provider returned an unsupported response.');
       }
       if (!isRecord(value)) throw upstreamError('Provider returned a malformed response.');
-      const events = this.protocol === 'responses' ? responsesJSONEvents(value) : chatJSONEvents(value);
+      const events =
+        this.protocol === 'responses' ? responsesJSONEvents(value) : chatJSONEvents(value);
       for (const event of events) yield event;
       return;
     }
-    if (!response.body) throw upstreamError('Provider returned an empty response.');
     const protocol =
       this.protocol ?? (response.url.includes('/responses') ? 'responses' : undefined);
-    const parser = parseSSE(response.body, signal);
+    const parser = parseSSE(body.value, signal);
     let detected = protocol;
     let finished = false;
     for await (const frame of parser) {
@@ -75,6 +76,55 @@ export class OpenAIWireAdapter implements ProviderAdapter {
     }
     if (!finished) throw upstreamError('Provider stream ended without a completion event.');
   }
+}
+
+async function classifyBody(
+  response: Response,
+  contentType: string
+): Promise<{ type: 'sse'; value: ReadableStream<Uint8Array> } | { type: 'json'; value: string }> {
+  if (!response.body) throw upstreamError('Provider returned an empty response.');
+  if (contentType.includes('text/event-stream')) return { type: 'sse', value: response.body };
+  if (contentType.includes('json')) return { type: 'json', value: await response.text() };
+
+  const reader = response.body.getReader();
+  const first = await reader.read();
+  if (first.done) throw upstreamError('Provider returned an empty response.');
+  const prefix = new TextDecoder().decode(first.value).trimStart();
+  const stream = prependChunk(first.value, reader);
+  if (prefix.startsWith('data:') || prefix.startsWith('event:') || prefix.startsWith(':')) {
+    return { type: 'sse', value: stream };
+  }
+  return { type: 'json', value: await new Response(stream).text() };
+}
+
+function prependChunk(
+  first: Uint8Array,
+  reader: {
+    read(): Promise<{ done: boolean; value?: Uint8Array }>;
+    cancel(reason?: unknown): Promise<void>;
+    releaseLock(): void;
+  }
+): ReadableStream<Uint8Array> {
+  let initial = first;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller): Promise<void> {
+      if (initial.byteLength > 0) {
+        controller.enqueue(initial);
+        initial = new Uint8Array();
+        return;
+      }
+      const next = await reader.read();
+      if (next.done) {
+        controller.close();
+        reader.releaseLock();
+        return;
+      }
+      if (next.value) controller.enqueue(next.value);
+    },
+    async cancel(reason): Promise<void> {
+      await reader.cancel(reason);
+    },
+  });
 }
 
 function chatJSONEvents(value: Record<string, unknown>): ProviderEvent[] {
@@ -115,10 +165,9 @@ function chatJSONEvents(value: Record<string, unknown>): ProviderEvent[] {
   if (usage) events.push(usage);
   events.push({
     type: 'finish',
-    reason:
-      events.some((event) => event.type === 'tool-start')
-        ? 'tool_calls'
-        : finishReason(choice.finish_reason) ?? 'stop',
+    reason: events.some((event) => event.type === 'tool-start')
+      ? 'tool_calls'
+      : (finishReason(choice.finish_reason) ?? 'stop'),
   });
   return events;
 }
